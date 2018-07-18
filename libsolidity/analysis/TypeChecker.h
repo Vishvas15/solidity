@@ -88,7 +88,9 @@ private:
 	/// Should only be called if the left hand side is tuple-typed.
 	void checkDoubleStorageAssignment(Assignment const& _assignment);
 
-	std::vector<TypePointer> deriveABIDecodeReturnTypes(FunctionCall const& _functionCall);
+	/// Performs type checks for ``abi.decode(bytes memory, (...))`` and returns the
+	/// return type.
+	TypePointer typeCheckABIDecodeAndRetrieveReturnType(FunctionCall const& _functionCall);
 
 	virtual void endVisit(InheritanceSpecifier const& _inheritance) override;
 	virtual void endVisit(UsingForDirective const& _usingFor) override;

@@ -531,27 +531,62 @@ void TypeChecker::checkDoubleStorageAssignment(Assignment const& _assignment)
 					);
 }
 
-vector<TypePointer> TypeChecker::deriveABIDecodeReturnTypes(FunctionCall const& _functionCall)
+TypePointer TypeChecker::typeCheckABIDecodeAndRetrieveReturnType(FunctionCall const& _functionCall)
 {
-	vector<TypePointer> returnTypes;
 	vector<ASTPointer<Expression const>> arguments = _functionCall.arguments();
-	for (size_t i = 1; i < arguments.size(); ++i)
+	if (arguments.size() != 2)
+		m_errorReporter.typeError(
+			_functionCall.location(),
+			"This function takes two arguments, but " +
+			toString(arguments.size()) +
+			" were provided."
+		);
+	if (arguments.size() >= 1 && !type(*arguments.front())->isImplicitlyConvertibleTo(ArrayType(DataLocation::Memory)))
+		m_errorReporter.typeError(
+			arguments.front()->location(),
+			"Invalid type for argument in function call. "
+			"Invalid implicit conversion from " +
+			type(*(*arguments)[i])->toString() +
+			" to bytes memory requested."
+		);
+
+	TypePointer returnType = make_shared<TupleType>();
+
+	if (arguments.size() < 2)
+		return returnType;
+
+	TupleType const* tupleType = dynamic_cast<TupleType const*>(type(arguments[1]).get());
+	if (!tupleType)
 	{
-		solAssert(arguments[i], "");
-		TypePointer const& argType = type(*arguments[i]);
-		if (TypeType const* argTypeType = dynamic_cast<TypeType const*>(argType.get()))
-			// TODO do we have to call "mobileType()" here?
-			// Are literals checked at a different place?
-			// What about storage pointers / storage references?
-			returnTypes.push_back(argTypeType->actualType());
+		m_errorReporter.typeError(
+			arguments[1]->location(),
+			"The second argument to \"abi.decode\" has to be a tuple of types."
+		);
+		return returnType;
+	}
+
+	TupleExpression const* tupleExpression = dynamic_cast<TupleExpression const*>(arguments[1]);
+	while (tupleExpression && tupleExpression->components().size() == 1)
+		tupleExpression = dynamic_cast<TupleExpression const*>(tupleExpression->components().front());
+
+	solAssert(tupleExpression, "");
+	solAssert(tupleExpression->components().size() == tupleType->components().size(), "");
+	for (size_t i = 0; i < tupleType->components().size(); ++i)
+	{
+		if (TypeType const* argTypeType = dynamic_cast<TypeType const*>(tupleType->components()[i].get()))
+		{
+			TypePointer actualType = argTypeType->actualType();
+			solAssert(*actualType, "");
+			returnTypes.push_back(actualType);
+		// TODO check that the decoder can decode this
+		}
 		else
 		{
-			m_errorReporter.typeError(arguments[i]->location(), "Argument has to be a type name.");
+			m_errorReporter.typeError(tupleExpression->components()[i]->location(), "Argument has to be a type name.");
 			returnTypes.push_back(make_shared<TupleType>());
 		}
 	}
-	// TODO check that the decoder can decode this
-	return returnTypes;
+	return returnType;
 }
 
 void TypeChecker::endVisit(InheritanceSpecifier const& _inheritance)
@@ -1686,7 +1721,9 @@ bool TypeChecker::visit(FunctionCall const& _functionCall)
 		}
 	}
 
-	if (functionType->takesArbitraryParameters() && arguments.size() < parameterTypes.size())
+	if (functionType->kind() == FunctionType::Kind::ABIDecode)
+		_functionCall.annotation().type = typeCheckABIDecodeAndRetrieveReturnType(_functionCall);
+	else if (functionType->takesArbitraryParameters() && arguments.size() < parameterTypes.size())
 	{
 		solAssert(_functionCall.annotation().kind == FunctionCallKind::FunctionCall, "");
 		m_errorReporter.typeError(
@@ -1757,23 +1794,19 @@ bool TypeChecker::visit(FunctionCall const& _functionCall)
 					}
 				if (!errored)
 				{
-					if (functionType->kind() != FunctionType::Kind::ABIDecode)
-					{
-						// TODO we stil have to do something for "decode"
-						TypePointer encodingType;
-						if (
-							argType->mobileType() &&
-							argType->mobileType()->interfaceType(false) &&
-							argType->mobileType()->interfaceType(false)->encodingType()
-						)
-							encodingType = argType->mobileType()->interfaceType(false)->encodingType();
-						// Structs are fine as long as ABIV2 is activated and we do not do packed encoding.
-						if (!encodingType || (
-							dynamic_cast<StructType const*>(encodingType.get()) &&
-							!(abiEncodeV2 && functionType->padArguments())
-						))
-							m_errorReporter.typeError(arguments[i]->location(), "This type cannot be encoded.");
-					}
+					TypePointer encodingType;
+					if (
+						argType->mobileType() &&
+						argType->mobileType()->interfaceType(false) &&
+						argType->mobileType()->interfaceType(false)->encodingType()
+					)
+						encodingType = argType->mobileType()->interfaceType(false)->encodingType();
+					// Structs are fine as long as ABIV2 is activated and we do not do packed encoding.
+					if (!encodingType || (
+						dynamic_cast<StructType const*>(encodingType.get()) &&
+						!(abiEncodeV2 && functionType->padArguments())
+					))
+						m_errorReporter.typeError(arguments[i]->location(), "This type ucannot be encoded.");
 				}
 			}
 			else if (!type(*arguments[i])->isImplicitlyConvertibleTo(*parameterTypes[i]))
@@ -1802,8 +1835,6 @@ bool TypeChecker::visit(FunctionCall const& _functionCall)
 						" or abi.encode(...) to use ABI encoding.";
 				m_errorReporter.typeError(arguments[i]->location(), msg);
 			}
-			if (functionType->kind() == FunctionType::Kind::ABIDecode)
-				_functionCall.annotation().type = make_shared<TupleType>(deriveABIDecodeReturnTypes(_functionCall));
 		}
 	}
 	else

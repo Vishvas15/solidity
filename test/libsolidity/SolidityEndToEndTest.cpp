@@ -12810,6 +12810,7 @@ BOOST_AUTO_TEST_CASE(abi_decode_v2)
 }
 
 // TODO test abi.decode with calldata bytes
+// also storage and memory references in the type list
 
 
 BOOST_AUTO_TEST_CASE(write_storage_external)
